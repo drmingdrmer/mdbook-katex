@@ -85,12 +85,6 @@ jobs:
         name: mdbook-katex-Linux
         path: artifacts/
 
-    - name: Get artifacts (Windows)
-      uses: actions/download-artifact@v1
-      with:
-        name: mdbook-katex-Windows
-        path: artifacts/
-
     - name: Extract the version tag
       id: version_tag
       # or ${GITHUB_REF##*/}
@@ -129,15 +123,6 @@ jobs:
         asset_name: mdbook-katex-${{ steps.version_tag.outputs.value }}-macos.zip
         asset_content_type: application/zip
 
-    - name: Upload Release Asset (win)
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/mdbook-katex-Windows.zip
-        asset_name: mdbook-katex-${{ steps.version_tag.outputs.value }}-windows.zip
-        asset_content_type: application/zip
 
   publish:
     name: publish
