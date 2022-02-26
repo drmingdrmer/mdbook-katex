@@ -1,6 +1,6 @@
 [package]
 name = "mdbook-katex"
-version = "0.2.13"
+version = "0.2.14"
 
 authors = [
     "drdr xp <drdr.xp@gmail.com",
@@ -25,3 +25,4 @@ reqwest = { version = "0.11.3", features = ["blocking"] }
 regex = "1.5.4"
 lazy_static = "1.0"
 futures = "0.3.15"
+
