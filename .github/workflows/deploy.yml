@@ -1,206 +1,177 @@
-name: deploy
-
+name: Build Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+    - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
 jobs:
-
-  windows-binary:
-
-    runs-on: windows-latest
-
-    env:
-      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-
-    steps:
-    - uses: actions/checkout@v2
-
-    - name: Install stable
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        target: x86_64-pc-windows-gnu # Not msvc because of quickjs-rs dependency
-        override: true
-
-    - name: Setup msys64 and mingw64
-      run: |
-        $Paths = "C:\msys64\mingw64\bin;C:\msys64\usr\bin"
-        echo "$Paths" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        echo "CARGO_BUILD_TARGET=x86_64-pc-windows-gnu" >> $GITHUB_ENV
-
-    - name: Build mdbook-katex
-      run: |
-        cargo build --release --target x86_64-pc-windows-gnu
-
-    - name: Strip mdbook-katex
-      run: |
-        strip target/x86_64-pc-windows-gnu/release/mdbook-katex.exe
-
-    - name: Get the version
-      shell: bash
-      id: tagName
-      run: |
-        VERSION=$(cargo pkgid | cut -d# -f2 | cut -d: -f2)
-        echo "::set-output name=version::$VERSION"
-
-    - name: Create zip
-      run: |
-        $ZIP_PREFIX = "mdbook-katex-v${{ steps.tagName.outputs.version }}"
-        7z a "$ZIP_PREFIX-x86_64-pc-windows-gnu.zip" `
-             "./target/x86_64-pc-windows-gnu/release/mdbook-katex.exe"
-
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v2
-      with:
-        path: mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-pc-windows-gnu.zip
-
-  linux-binaries:
+  build:
+    name: Build Release Artifacts
+    runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: true
       matrix:
-        target:
-         - x86_64-unknown-linux-gnu
-         - x86_64-unknown-linux-musl
+        os:
+        - macos-latest
+        - ubuntu-latest
+        - windows-latest
 
+    env:
+      RUSTFLAGS: -D warnings
+      RUST_BACKTRACE: full
+      CARGO_INCREMENTAL: 0
+      RUSTUP_MAX_RETRIES: 100
+      CARGO_NET_RETRY: 100
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    # We need to disable the existing toolchain to avoid updating rust-docs
+    # which takes a long time. The fastest way to do this is to rename the
+    # existing folder, as deleting it takes about as much time as not doing
+    # anything and just updating rust-docs.
+    - name: Rename existing rust toolchain (Windows)
+      if: matrix.os == 'windows-latest'
+      run: Rename-Item C:\Users\runneradmin\.rustup\toolchains\stable-x86_64-pc-windows-msvc C:\Users\runneradmin\.rustup\toolchains\stable-x86_64-pc-windows-msvc.old
+
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1.0.6
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - if: matrix.os == 'ubuntu-latest'
+      run: sudo chown -R $(whoami):$(id -ng) ~/.cargo/
+
+    - name: Restore cargo cache from cache
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo
+        key: ${{ runner.os }}-cargo
+        restore-keys: |
+          ${{ runner.os }}-cargo
+
+    - name: Tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --all
+
+    - name: Build
+      shell: bash
+      run: cargo build --all --release
+
+    - name: Archive
+      if: matrix.os != 'windows-latest'
+      run: zip --junk-paths mdbook-katex-${{ runner.os }}.zip LICENSE README.md target/release/mdbook-katex
+
+    - name: Archive (win)
+      if: matrix.os == 'windows-latest'
+      uses: papeloto/action-zip@v1
+      with:
+        files: LICENSE README.md target/release/mdbook-katex.exe
+        dest: mdbook-katex-${{ runner.os }}.zip
+
+    - uses: actions/upload-artifact@master
+      with:
+        name: mdbook-katex-${{ runner.os }}
+        path: mdbook-katex-${{ runner.os }}.zip
+
+
+  release:
+    needs: build
+    name: Upload Artifacts
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v2
+    - name: Checkout repository
+      uses: actions/checkout@v2
 
-    - name: Install musl tools
-      if: matrix.target == 'x86_64-unknown-linux-musl'
-      run: |
-        sudo apt-get install musl-tools
-
-    - name: Install ${{ matrix.target }} target
-      uses: actions-rs/toolchain@v1
+    - name: Get artifacts (macOS)
+      uses: actions/download-artifact@v1
       with:
-        profile: minimal
-        toolchain: stable
-        target: ${{ matrix.target }}
-        override: true
+        name: mdbook-katex-macOS
+        path: artifacts/
 
-    - name: Build mbdook-katex
-      run: |
-        cargo build --release --target ${{ matrix.target }}
-
-    - name: Strip mdbook-katex
-      run: |
-        strip target/${{ matrix.target }}/release/mdbook-katex
-
-    - name: Get the version
-      id: tagName
-      run: |
-        VERSION=$(cargo pkgid | cut -d# -f2 | cut -d: -f2)
-        echo "::set-output name=version::$VERSION"
-
-    - name: Create tar
-      run: |
-        TAR_FILE=mdbook-katex-v${{ steps.tagName.outputs.version }}
-        tar -czvf $TAR_FILE-${{ matrix.target }}.tar.gz \
-                  target/${{ matrix.target }}/release/mdbook-katex
-
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v2
+    - name: Get artifacts (Linux)
+      uses: actions/download-artifact@v1
       with:
-        path: mdbook-katex-v${{ steps.tagName.outputs.version }}-${{ matrix.target }}.tar.gz
+        name: mdbook-katex-Linux
+        path: artifacts/
 
-  macos-binary:
-
-    runs-on: macos-latest
-
-    steps:
-    - uses: actions/checkout@v2
-
-    - name: Install stable
-      uses: actions-rs/toolchain@v1
+    - name: Get artifacts (Windows)
+      uses: actions/download-artifact@v1
       with:
-        profile: minimal
-        toolchain: stable
-        override: true
+        name: mdbook-katex-Windows
+        path: artifacts/
 
-    - name: Build mdbook-katex
-      run: |
-        cargo build --release
+    - name: Extract the version tag
+      id: version_tag
+      # or ${GITHUB_REF##*/}
+      shell: bash
+      run: echo ::set-output name=value::$(echo $GITHUB_REF | cut -d / -f 3)
 
-    - name: Strip mdbook-katex
-      run: |
-        strip target/release/mdbook-katex
-
-    - name: Get the version
-      id: tagName
-      run: |
-        VERSION=$(cargo pkgid | cut -d# -f2 | cut -d: -f2)
-        echo "::set-output name=version::$VERSION"
-
-    - name: Create tar
-      run: |
-        TAR_PREFIX=mdbook-katex-v${{ steps.tagName.outputs.version }}
-        tar -czvf $TAR_PREFIX-x86_64-apple-darwin.tar.gz \
-                  target/release/mdbook-katex
-
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v2
-      with:
-        path: mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-apple-darwin.tar.gz
-
-  deploy:
-
-    needs: [windows-binary, linux-binaries, macos-binary]
-
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v2
-
-    - name: Download artifacts
-      uses: actions/download-artifact@v2
-      with:
-        name: artifact
-
-    - name: Install Rust stable
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        override: true
-
-    - name: Create Cargo.lock
-      run: |
-        cargo update
-
-    - name: Get the version
-      id: tagName
-      run: |
-        VERSION=$(cargo pkgid | cut -d# -f2 | cut -d: -f2)
-        echo "::set-output name=version::$VERSION"
-
-    - name: Create a release
-      uses: softprops/action-gh-release@v1
-      with:
-        name: v${{ steps.tagName.outputs.version }}
-        files: |
-          Cargo.lock
-          mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-apple-darwin.tar.gz
-          mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-pc-windows-gnu.zip
-          mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
-          mdbook-katex-v${{ steps.tagName.outputs.version }}-x86_64-unknown-linux-musl.tar.gz
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: ${{ github.ref }}
+        draft: true
+        prerelease: true
+
+    - name: Upload Release Asset (linux)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include an `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/mdbook-katex-Linux.zip
+        asset_name: mdbook-katex-${{ steps.version_tag.outputs.value }}-linux.zip
+        asset_content_type: application/zip
+
+    - name: Upload Release Asset (mac)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/mdbook-katex-macOS.zip
+        asset_name: mdbook-katex-${{ steps.version_tag.outputs.value }}-macos.zip
+        asset_content_type: application/zip
+
+    - name: Upload Release Asset (win)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/mdbook-katex-Windows.zip
+        asset_name: mdbook-katex-${{ steps.version_tag.outputs.value }}-windows.zip
+        asset_content_type: application/zip
 
   publish:
-
+    name: publish
+    needs: release
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: true
+
     steps:
-        - uses: actions/checkout@v2
-        - uses: actions-rs/toolchain@v1
-          with:
-              toolchain: stable
-              override: true
-        - uses: katyo/publish-crates@v1
-          with:
-              registry-token: ${{ secrets.CARGO_CREDENTIALS }}
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Publish crate
+      uses: actions-rs/cargo@v1
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      with:
+        toolchain: stable
+        command: publish
+        # args: --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
