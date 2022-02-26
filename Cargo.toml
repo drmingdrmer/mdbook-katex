@@ -1,7 +1,11 @@
 [package]
 name = "mdbook-katex"
-version = "0.2.10"
-authors = ["Lucas Zanini <zanini.lcs@gmail.com>"]
+version = "0.2.11"
+authors = [
+    "drdr xp <drdr.xp@gmail.com",
+    "Lucas Zanini <zanini.lcs@gmail.com>",
+]
+
 edition = "2018"
 description = "mdBook preprocessor rendering LaTex equations to HTML."
 license = "MIT"
